@@ -1,6 +1,6 @@
 # Aqua-axolotl-Arduino-Due-Nextion-ws2812
 - sketch pour arduino Due et ws2812
-- gestion automatique de l'eclairage .
+- gestion automatique de l'éclairage avec simulation du lever/coucher du soleil et lever/coucher lune .
 - les RGB avec controle horaire DS3231 sur affichage Nextion NX4832k035
 - controle de temperature et affichage sur Nextion
 - affichage de la phase de la lune.
