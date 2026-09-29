@@ -1,15 +1,53 @@
 /*
-  AstroDue V5.9.5.1 - Firmware Ultimate RGBW (Digital)
+  AstroDue V5.9.5.5
+  - Firmware Ultimate RGBW (Digital)
   Plateforme : Arduino Due (SAM3X8E)
   Ecran : Nextion HMI (Serial1)
   RTC : DS3231 (I2C)
   CORRECTIONS :
   - Fix calcul Lune : Ajout termes Evection/Variation dans la boucle de scan.
   - LOGIQUE DYNAMIQUE : Aube/Crépuscule progressifs & Nuit selon phase lunaire.
-  - COMMANDE SETDATE (Format: SETDATE 2025 6 21)
-  - COMMANDE SETTIME (Format: SETTIME 18 30)
-  - COMMANDE SETGPS DMS (Format: SETGPS LatD LatM LatS LngD LngM LngS UTC)
-    -> Exemple Paris (UTC+1): SETGPS 48 51 23 2 21 07 1
+/* =========================================================================
+ * LISTE DES COMMANDES DISPONIBLES VIA LE PORT SÉRIE :
+ * =========================================================================
+ * 
+ * - COMMANDE SETDATE
+ *   - Format  : SETDATE Annee Mois Jour
+ *   - Exemple : SETDATE 2025 6 21
+ *   - Rôle    : Met à jour la date courante du système.
+ * 
+ * - COMMANDE SETTIME
+ *   - Format  : SETTIME Heure Minute
+ *   - Exemple : SETTIME 18 30
+ *   - Rôle    : Met à jour l'heure courante du système.
+ * 
+ * - COMMANDE SETGPS DMS
+ *   - Format  : SETGPS LatD LatM LatS LngD LngM LngS UTC
+ *   - Exemple : SETGPS 48 51 23 2 21 07 1
+ *   - Rôle    : Met à jour les coordonnées géographiques (Degrés, Minutes, Secondes) 
+ *               et l'offset UTC, avec sauvegarde automatique dans l'EEPROM.
+ * 
+ * - MODE DÉMO : Plein Soleil (Midi)
+ *   - Commande : DEMO SUN (ou DEMO 12.0)
+ *   - Rôle    : Lance une simulation en accéléré de la journée en se 
+ *               positionnant directement à 12h00 (zénith et intensité max).
+ * 
+ * - MODE DÉMO : Pleine Nuit (Minuit)
+ *   - Commande : DEMO MOON (ou DEMO 0.0)
+ *   - Rôle    : Lance la simulation en accéléré en se positionnant à 
+ *               00h00 pour tester l'éclairage nocturne et la lune.
+ * 
+ * - MODE DÉMO à une heure précise
+ *   - Format  : DEMO [Heure Décimale]
+ *   - Exemple : DEMO 6.5
+ *   - Rôle    : Démarre la simulation accélérée à l'heure souhaitée 
+ *               (ex: 6.5 pour 6h30, idéal pour observer l'aube).
+ * 
+ * - ARRÊT DU MODE DÉMO
+ *   - Commande : DEMO OFF
+ *   - Rôle    : Stoppe la simulation, réinitialise les éphémérides et 
+ *               redonne le contrôle total à l'horloge temps réel (RTC).
+ * ========================================================================= 
   - Une Limite à 40% de la Puissance Totale a été Fixer pour Poisson Sensible Mais Peut être Modifie
     -> Par Exemple Pour 100% : const float MAX_POWER_AXO =1.0
   - L'intensite Lumineuse ne Pourra pas être Depasser, le Dimmer est Ajuster a Sont Max Limité
@@ -210,7 +248,7 @@ void refreshScreen() {
     sendNextion("t_time.txt=\"" + String(timeBuf) + "\"");
     // ----indique si utc manuel ou auto
     String modeStr = isAutoMode ? "AUTO" : "MAN";
-    String offsetStr = (currentUtcOffset >= 0 ? "+" : "") + String(currentUtcOffset);
+    String offsetStr = (currentUtcOffset >= 0 ? "+" : "") + String((int)currentUtcOffset);
     sendNextion("t_info.txt=\"UTC" + offsetStr + " " + modeStr + "\"");
     // --- HEURE ET INFOS GÉO (Page 0) ---
     sendNextion("t_lat.txt=\"" + convertToDMS(currentLat, true) + "\"");
@@ -248,8 +286,11 @@ void refreshScreen() {
     sendNextion("minute.val=" + String(now.minute()));
     sendNextion("seconde.val=" + String(now.second()));
 
-    String prefix = (manualOffset >= 0) ? "+" : "";
-    sendNextion("t_utc.txt=\"" + prefix + String(manualOffset) + "\"");
+
+    // On affiche le tampon si on est en train d'éditer (Page 1 ou 2)
+    int displayOffset = (currentPage == 1 || currentPage == 2) ? editManualOffset : manualOffset;
+    String prefix = (displayOffset >= 0) ? "+" : "";
+    sendNextion("t_utc.txt=\"" + prefix + String(displayOffset) + "\"");
     sendNextion("bt_DST.val=" + String(isDstActive ? 1 : 0));
 
     // ENVOI SYSTEMATIQUE du jour de la semaine (plus de static lastDOW)
@@ -340,6 +381,7 @@ void setup() {
   WDT_Enable(WDT, WDT_MR_WDRSTEN | WDT_MR_WDV(0xFFF) | WDT_MR_WDD(0xFFF));
   // 1. Initialisation des ports série (TOUJOURS EN PREMIER)
   Serial.begin(115200);    // Port USB (PC)
+  Serial.setTimeout(100);  // 100ms suffit en latence USB
   Serial1.begin(115200);   // Port Écran Nextion (Pins 18/19)
   Serial1.setTimeout(10);  // Rapidité pour le Due
   delay(1000);             // Laisse le temps au port série de se stabiliser
@@ -420,26 +462,54 @@ void setup() {
 void loop() {
   // Réinitialise le compteur du Watchdog pour éviter le reset automatique du Due
   WDT->WDT_CR = WDT_CR_KEY(0xA5) | WDT_CR_WDRSTT;
-  // 1. Mise à jour de l'heure Hors Page 1
-  if (currentPage != 1) {
-    now = rtc.now();
+
+  // 1. Mise à jour de l'heure (Réelle ou Virtuelle)
+  if (demoMode) {
+    unsigned long currentMillis = millis();
+    // 1 seconde réelle = 6 minutes virtuelles (1 journée en 4 minutes)
+    if (currentMillis - lastDemoUpdate >= 1000) {
+      lastDemoUpdate = currentMillis;
+
+      demoTimeHour += 0.1;
+      if (demoTimeHour >= 24.0) demoTimeHour -= 24.0;
+
+      int h = (int)demoTimeHour;
+      int m = (int)((demoTimeHour - h) * 60.0);
+      int s = (int)(((demoTimeHour - h) * 60.0 - m) * 60.0);
+
+      // On garde la VRAIE date, on change juste l'heure
+      now = DateTime(now.year(), now.month(), now.day(), h, m, s);
+
+      // L'écran va afficher l'heure qui défile en accéléré !
+      refreshScreen();
+    }
+  } else if (currentPage != 1) {
+    now = rtc.now();  // Comportement normal
   }
-  // 2. Recalcul Automatique des éphémérides toutes les heures hors page 1
-  // Pour Rajouter de la precision sur les Phases et Lever coucher de Lune
+
+  // 2. Recalcul Automatique des éphémérides uniquement sur changement d'heure réel (hors démo et hors page 1)
+  // On met simplement à jour lastHour en silence si on est en démo ou sur la page 1
+  // pour qu'au moment de la reprise, il se cale sur l'heure actuelle sans recalculer bêtement.
   static int lastHour = -1;
-  if (currentPage != 1 && now.hour() != lastHour) {
-    calculateAstroData();
+  if (demoMode || currentPage == 1) {
     lastHour = now.hour();
+  } else if (now.hour() != lastHour) {
+    lastHour = now.hour();
+    calculateAstroData();
     Serial.println(F("Calcul horaire effectué."));
   }
   // 3. Lecture des commandes
   readNextionCommands();
   readSerialPC();
-  // Si un bouton SAVE a été pressé, on traite les calculs ici
+  // Si un bouton SAVE a été pressé, on traite les calculs ici sauf si Mode Demo
   if (pendingRTCUpdate) {
-    rtc.adjust(now);
+    if (!demoMode) {
+      rtc.adjust(now);
+      Serial.println(F("RTC synchronisé."));
+    } else {
+      Serial.println(F("Sauvegarde RTC ignorée (Mode Démo actif)."));
+    }
     pendingRTCUpdate = false;
-    Serial.println(F("RTC synchronisé."));
   }
   if (pendingAstroUpdate) {
     calculateAstroData();  // Le calcul lourd (1440 itérations)
@@ -465,7 +535,7 @@ void loop() {
   }
   // 6. Rafraîchissement de l'écran (Seulement si on est sur la bonne page)
   static int lastMinute = -1;
-  if (currentPage == 0 && (now.minute() != lastMinute || millis() - lastScreenRefresh > 5000)) {
+  if (!demoMode && currentPage == 0 && (now.minute() != lastMinute || millis() - lastScreenRefresh > 5000)) {
     lastMinute = now.minute();
     lastScreenRefresh = millis();
     refreshScreen();
@@ -519,7 +589,43 @@ void readSerialPC() {
       } else {
         Serial.println(F("Erreur format: 'SETTIME 18 30'"));
       }
-    }  // --- COMMANDE SETGPS DMS (Format: SETGPS LatD LatM LatS LngD LngM LngS UTC) ---
+    }
+    // --- COMMANDE MODE DEMO (insensible à la casse) ---
+    else if (pcCmd.length() >= 4 && pcCmd.substring(0, 4).equalsIgnoreCase("DEMO")) {
+      String arg = pcCmd.substring(4);
+      arg.trim();
+
+      if (arg.equalsIgnoreCase("OFF")) {
+        demoMode = false;
+        now = rtc.now();  // Retour immédiat à l'heure réelle
+        calculateAstroData();
+        checkRelayAndLeds();
+        refreshScreen();
+        Serial.println(F("MODE DEMO DESACTIVE (Retour heure reelle)"));
+      } else {
+        demoMode = true;
+        if (arg.equalsIgnoreCase("SUN")) {
+          demoTimeHour = 12.0;
+          Serial.println(F("MODE DEMO ACTIVE -> Depart au Soleil (12h00)"));
+        } else if (arg.equalsIgnoreCase("MOON")) {
+          demoTimeHour = 0.0;
+          Serial.println(F("MODE DEMO ACTIVE -> Depart a la Lune (00h00)"));
+        } else {
+          float customHour = atof(arg.c_str());
+          demoTimeHour = constrain(customHour, 0.0, 23.99);
+          Serial.print(F("MODE DEMO ACTIVE -> Depart a l'heure : "));
+          Serial.println(demoTimeHour);
+        }
+        lastDemoUpdate = millis();
+        int h = (int)demoTimeHour;
+        int m = (int)((demoTimeHour - h) * 60.0);
+        now = DateTime(now.year(), now.month(), now.day(), h, m, 0);
+        checkRelayAndLeds();
+        refreshScreen();
+      }
+    }
+
+    // --- COMMANDE SETGPS DMS (Format: SETGPS LatD LatM LatS LngD LngM LngS UTC) ---
     // Exemple Paris (Hiver): SETGPS 48 51 23 2 21 07 1
     // Exemple New York: SETGPS 40 42 46 -74 0 21 -5
     else if (pcCmd.startsWith("SETGPS")) {
@@ -536,6 +642,8 @@ void readSerialPC() {
         currentLng = lngDecimal;
         // Mise à jour de l'Offset UTC
         manualOffset = (double)offset;
+        // --- Persistance sur EEPROM des Modifications ---
+        saveGPS(currentLat, currentLng, manualOffset);
         // Recalcul complet
         calculateAstroData();
         refreshScreen();
@@ -551,22 +659,77 @@ void readSerialPC() {
     }
   }
 }
+// --- CCT (K) du ciel vs altitude solaire (°) ---
+static double cctFromAltitude(double h) {
+  const double A[9] = { -0.5, 0.0, 3.0, 6.0, 10.0, 15.0, 25.0, 40.0, 55.0 };
+  const double C[9] = { 1600, 1800, 2200, 2800, 3500, 4100, 4900, 5500, 5800 };
+  if (h <= A[0]) return C[0];
+  for (int i = 1; i < 9; i++) {
+    if (h <= A[i]) {
+      double t = (h - A[i - 1]) / (A[i] - A[i - 1]);
+      return C[i - 1] + t * (C[i] - C[i - 1]);
+    }
+  }
+  return C[8];
+}
+
+// --- Conversion CCT -> RGB (Tanner Helland) ---
+static void cctToRGB(double cct, double& R, double& G, double& B) {
+  double t = cct / 100.0;
+  if (t <= 66.0) R = 255.0;
+  else R = 329.698727446 * pow(t - 60.0, -0.1332047592);
+
+  if (t <= 66.0) G = 99.4708025861 * log(t) - 161.1195681661;
+  else G = 288.1221695283 * pow(t - 60.0, -0.0755148492);
+
+  if (t >= 66.0) B = 255.0;
+  else if (t <= 19.0) B = 0.0;
+  else B = 138.5177312231 * log(t - 10.0) - 305.0447927307;
+
+  R = constrain(R, 0.0, 255.0);
+  G = constrain(G, 0.0, 255.0);
+  B = constrain(B, 0.0, 255.0);
+}
+
 void computeSunChannel() {
-  double hourDec = now.hour() + now.minute() / 60.0;
+  // Ajout des secondes pour une transition parfaitement fluide
+  double hourDec = now.hour() + now.minute() / 60.0 + now.second() / 3600.0;
   currentSunAlt = getSunElevation(hourDec);
-  if (currentSunAlt > -6.0 && maxElevationToday > -6.0) {
-    double xSun = (currentSunAlt + 6.0) / (maxElevationToday + 6.0);
-    xSun = constrain(xSun, 0.0, 1.0);
+  double h = currentSunAlt;
 
-    sunR = 255 * pow(xSun, 0.45);
-    sunG = 255 * pow(xSun, 0.85);
-    sunB = 255 * pow(xSun, 1.80);
-    sunW = 255 * pow(xSun, 2.20);
+  if (h > -6.0 && maxElevationToday > -6.0) {
+    double R = 0, G = 0, B = 0, W = 0;
 
-    sunR = min(sunR, 255.0);
-    sunG = min(sunG, 255.0);
-    sunB = min(sunB, 255.0);
-    sunW = min(sunW, 255.0);
+    if (h >= -0.5) {
+      // PLEIN JOUR : CCT dépendante de l'altitude + masse d'air
+      cctToRGB(cctFromAltitude(h), R, G, B);
+      double E = pow(constrain(sin(h * DEG_TO_RAD), 0.0, 1.0), 0.55);
+      double glow = 0.30 * exp(-pow(h / 2.5, 2));  // Flamboiement rasant
+      E = max(E, glow);
+      R *= E;
+      G *= E;
+      B *= E;
+
+      // Transfert du blanc neutre vers la LED W (SK6812)
+      W = min(R, min(G, B)) * 0.85;
+      R -= W;
+      G -= W;
+      B -= W;
+    } else {
+      // CRÉPUSCULE : Halo orange puis Heure Bleue
+      double warm = exp(-pow((h + 2.0) / 1.6, 2));  // Pic orange à -2°
+      double blue = exp(-pow((h + 4.8) / 1.9, 2));  // Pic bleu à -4.8°
+      R = 140.0 * warm + 30.0 * blue;
+      G = 60.0 * warm + 60.0 * blue;
+      B = 17.0 * warm + 170.0 * blue;
+      W = 0;
+    }
+
+    // Application du Master Dimmer / Sécurité Axolotl (UNE SEULE FOIS ICI)
+    sunR = R * intensiteManuelle;
+    sunG = G * intensiteManuelle;
+    sunB = B * intensiteManuelle;
+    sunW = W * intensiteManuelle;
   } else {
     sunR = 0;
     sunG = 0;
@@ -581,6 +744,8 @@ void computeMoonChannel() {
   isMoonUp = false;
   double nowDec = now.hour() + now.minute() / 60.0;
   int minuteIdx = now.hour() * 60 + now.minute();
+  if (minuteIdx > 1439) minuteIdx = 1439;
+  currentMoonAzimuth = moonAzimuthTable[minuteIdx];
 
   bool moonPresent = false;
   if (moonRiseDec >= 0 && moonSetDec >= 0) {
@@ -627,6 +792,8 @@ void checkRelayAndLeds() {
     return;
   }
 
+  // Le seasonalFactor n'est plus utilisé pour multiplier les LEDs (le modèle physique s'en charge),
+  // mais on le garde pour l'affichage du pourcentage théorique sur l'écran Nextion.
   if (maxElevationToday <= 0) seasonalFactor = 0.0;
   else seasonalFactor = constrain(maxElevationToday / 90.0, 0.0, 1.0);
 
@@ -639,14 +806,12 @@ void checkRelayAndLeds() {
   computeSunChannel();
   computeMoonChannel();
 
-  // pwrFinal s'applique sur le Soleil
-  float pwrFinal = seasonalFactor * intensiteManuelle;
-
-  // CORRECTION : Les targets globales ne gèrent QUE le Soleil (le fond)
-  targetR = constrain((int)(sunR * pwrFinal + 0.5), 0, 255);
-  targetG = constrain((int)(sunG * pwrFinal + 0.5), 0, 255);
-  targetB = constrain((int)(sunB * pwrFinal + 0.5), 0, 255);
-  targetW = constrain((int)(sunW * pwrFinal + 0.5), 0, 255);
+  // --- CORRECTION CRITIQUE ---
+  // Le nouveau computeSunChannel() applique DÉJÀ l'intensité physique (sin(h)) et le dimmer (intensiteManuelle).
+  targetR = constrain((int)(sunR + 0.5), 0, 255);
+  targetG = constrain((int)(sunG + 0.5), 0, 255);
+  targetB = constrain((int)(sunB + 0.5), 0, 255);
+  targetW = constrain((int)(sunW + 0.5), 0, 255);
 
   if (currentPage == 0) {
     sendNextion("led_r.val=" + String(map(targetR, 0, 255, 0, 100)));
@@ -655,9 +820,8 @@ void checkRelayAndLeds() {
     sendNextion("led_w.val=" + String(map(targetW, 0, 255, 0, 100)));
   }
 }
-
 void updateLedsSmoothly() {
-  
+
   currentR += (targetR - currentR) * SMOOTH_SPEED;
   currentG += (targetG - currentG) * SMOOTH_SPEED;
   currentB += (targetB - currentB) * SMOOTH_SPEED;

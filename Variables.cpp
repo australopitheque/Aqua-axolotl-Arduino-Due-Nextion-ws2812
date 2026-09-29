@@ -23,6 +23,11 @@ int lastSentFactor = -1;
 bool pendingRTCUpdate = false;
 bool pendingAstroUpdate = false;
 
+// ---- DEMO ---
+bool demoMode = false;
+float demoTimeHour = 0.0;       
+unsigned long lastDemoUpdate = 0;
+
 // --- VARIABLES POUR LISSAGE ET EFFET LUNE ---
 float sunR = 0, sunG = 0, sunB = 0, sunW = 0;
 float moonB = 0, moonW = 0;

@@ -18,6 +18,11 @@ extern DateTime now;
 extern RTC_DS3231 rtc;
 extern Adafruit_NeoPixel strip;
 
+//--- DEMO ---
+extern bool demoMode;
+extern float demoTimeHour;
+extern unsigned long lastDemoUpdate;
+
 extern int currentPage;
 extern bool isAutoMode;
 extern bool isDstActive;
@@ -26,6 +31,7 @@ extern bool isMaintenanceMode;
 extern double manualOffset;
 extern double currentUtcOffset;
 extern int lastSentFactor;
+
 
 extern bool pendingRTCUpdate;
 extern bool pendingAstroUpdate;
@@ -71,6 +77,7 @@ void refreshScreen();
 void processCommand(uint8_t* buf, size_t len);
 void readSerialPC();
 void saveGPS(double lat, double lng, double utc);
+void loadGPS();
 
 // Fonctions Astronomiques (AstroEngine.cpp)
 void calculateAstroData();

@@ -82,7 +82,7 @@ void processCommand(uint8_t* buf, size_t len) {
     else if (m == 4 || m == 6 || m == 9 || m == 11) maxDay = 30;
     d = constrain(d, 1, maxDay);
 
-    now = DateTime(y, m, d, now.hour(), now.minute(), 0);
+    now = DateTime(y, m, d, now.hour(), now.minute(), now.second());
     timeChanged = true;
 
   } else if (len == 6 && memcmp(buf, "MO_DEC", 6) == 0) {
@@ -100,7 +100,7 @@ void processCommand(uint8_t* buf, size_t len) {
     else if (m == 4 || m == 6 || m == 9 || m == 11) maxDay = 30;
     d = constrain(d, 1, maxDay);
 
-    now = DateTime(y, m, d, now.hour(), now.minute(), 0);
+    now = DateTime(y, m, d, now.hour(), now.minute(), now.second());
     timeChanged = true;
   } else if (len == 5 && memcmp(buf, "Y_INC", 5) == 0) {
     int y = now.year() + 1;
@@ -113,7 +113,7 @@ void processCommand(uint8_t* buf, size_t len) {
     else if (m == 4 || m == 6 || m == 9 || m == 11) maxDay = 30;
     d = constrain(d, 1, maxDay);
 
-    now = DateTime(y, m, d, now.hour(), now.minute(), 0);
+    now = DateTime(y, m, d, now.hour(), now.minute(), now.second());
     timeChanged = true;
 
   } else if (len == 5 && memcmp(buf, "Y_DEC", 5) == 0) {
@@ -127,7 +127,7 @@ void processCommand(uint8_t* buf, size_t len) {
     else if (m == 4 || m == 6 || m == 9 || m == 11) maxDay = 30;
     d = constrain(d, 1, maxDay);
 
-    now = DateTime(y, m, d, now.hour(), now.minute(), 0);
+    now = DateTime(y, m, d, now.hour(), now.minute(), now.second());
     timeChanged = true;
   }
 
@@ -193,8 +193,9 @@ void processCommand(uint8_t* buf, size_t len) {
   }
   // 6. ENREGISTREMENT (Les fonctions cruciales)
   else if (len == 8 && memcmp(buf, "SAVE_RTC", 8) == 0) {
-    pendingRTCUpdate = true;    // Indique au loop qu'il faut écrire dans le DS3231
-    pendingAstroUpdate = true;  // Indique qu'il faut recalculer les levers/couchers
+    rtc.adjust(now);                  // Écriture immédiate dans le RTC
+    manualOffset = editManualOffset;  // Validation du fuseau
+    pendingAstroUpdate = true;
     needRefresh = true;
     Serial.println(F("Commande : SAVE_RTC reçue."));
   } else if (len == 8 && memcmp(buf, "SAVE_GPS", 8) == 0) {
