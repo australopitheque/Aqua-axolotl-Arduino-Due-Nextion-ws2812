@@ -1,10 +1,11 @@
 # Aqua-axolotl-Arduino-Due-Nextion-sk6812
 - sketch pour arduino Due et sk6812
 - gestion automatique de l'éclairage avec simulation du lever/coucher du soleil et lever/coucher lune .
+- <img width="1152" height="648" alt="trajectoire lunaire" src="https://github.com/user-attachments/assets/604bdebb-03ae-4a56-92d9-85fffc7c7296" />
 - les RGB avec controle horaire DS3231 sur affichage Nextion NX4832k035
 - controle de temperature et affichage sur Nextion
-- affichage de la phase de la lune.
-- calcule heure lever coucher du soleil suivant localisation et affichage sur nextion
+- affichage de la phase de la lune et de l'heure de Lever/ coucher.
+- calcule heure/lever coucher du soleil suivant localisation et affichage sur nextion
 - Contrôle de la position Geographique
 - Contrôle et gestion de la date(automatique ou manuel) et Gestion automatique DST Europe
 <img width="478" height="321" alt="image" src="https://github.com/user-attachments/assets/bc3415fd-4c28-4739-9f75-9f5922e8d678" />
